@@ -197,6 +197,7 @@
       <input id="codeInput" maxlength="4" placeholder="0000" inputmode="numeric">
       <button class="btn-generate" id="genBtn">צור קוד</button>
     </div>
+    <div id="fbStatus" style="font-family:var(--mono); font-size:11px; letter-spacing:.05em; color:var(--text-dim);">בודק חיבור למסד הנתונים…</div>
   </div>
 
   <div class="role-row">
@@ -286,13 +287,49 @@
   </div>
 </div>
 
-<script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+import {
+  getDatabase, ref, get, set, onValue
+} from "https://www.gstatic.com/firebasejs/10.13.0/firebase-database.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyCugoF1452JO7_VBt4touyyLY3GGUDXQHc",
+  authDomain: "teleprompter-89af7.firebaseapp.com",
+  databaseURL: "https://teleprompter-89af7-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "teleprompter-89af7",
+  storageBucket: "teleprompter-89af7.firebasestorage.app",
+  messagingSenderId: "132180043645",
+  appId: "1:132180043645:web:dee5c62e56739d2145ce14",
+  measurementId: "G-PXNH6VVS6L"
+};
+
+const fbApp = initializeApp(firebaseConfig);
+const db = getDatabase(fbApp);
+
+// live connectivity probe so failures are visible on-screen (not just devtools console)
+(function probeConnection(){
+  const statusEl = document.getElementById('fbStatus');
+  if(!statusEl) return;
+  const testRef = ref(db, '_connTest');
+  set(testRef, { t: Date.now() })
+    .then(()=> get(testRef))
+    .then(()=>{
+      statusEl.textContent = '✓ מחובר למסד הנתונים';
+      statusEl.style.color = '#3EAE5C';
+    })
+    .catch((err)=>{
+      statusEl.textContent = '✗ אין חיבור למסד: ' + (err && err.code ? err.code : err);
+      statusEl.style.color = '#E8342A';
+      console.error('Firebase connection probe failed:', err);
+    });
+})();
+
 (function(){
   const $ = id => document.getElementById(id);
   let roomCode = null;
   let role = null; // 'display' | 'remote'
   let state = null; // last known synced state
-  let lastFetchOk = false;
 
   const DEFAULT_STATE = () => ({
     script: 'הדביקו כאן את הטקסט שלכם.\n\nהמסך יגלול אוטומטית לפי המהירות שתקבעו בשלט.',
@@ -305,7 +342,7 @@
     updatedAt: Date.now()
   });
 
-  function keyFor(code){ return 'tp:' + code; }
+  function sessionRef(code){ return ref(db, 'sessions/' + code); }
 
   function computePos(s){
     if(!s) return 0;
@@ -317,17 +354,17 @@
 
   async function loadState(code){
     try{
-      const res = await window.storage.get(keyFor(code), true);
-      if(res && res.value){ return JSON.parse(res.value); }
+      const snap = await get(sessionRef(code));
+      if(snap.exists()) return snap.val();
       return null;
-    }catch(e){ return null; }
+    }catch(e){ console.error('loadState failed', e); return null; }
   }
   async function saveState(code, s){
     try{
       s.updatedAt = Date.now();
-      await window.storage.set(keyFor(code), JSON.stringify(s), true);
+      await set(sessionRef(code), s);
       return true;
-    }catch(e){ return false; }
+    }catch(e){ console.error('saveState failed', e); return false; }
   }
 
   // ---------------- SETUP SCREEN ----------------
@@ -359,7 +396,11 @@
     let existing = await loadState(roomCode);
     if(!existing){
       existing = DEFAULT_STATE();
-      await saveState(roomCode, existing);
+      const ok = await saveState(roomCode, existing);
+      if(!ok){
+        setupError.textContent = 'לא ניתן לכתוב למסד הנתונים — בדקו את חוקי ה-Rules ב-Firebase (Read/Write).';
+        return;
+      }
     }
     state = existing;
 
@@ -380,7 +421,6 @@
   const dpDot = $('dpDot');
   const dpHud = $('dpHud');
   const dpCodeLabel = $('dpCodeLabel');
-  let dpPollTimer = null;
   let dpRafId = null;
 
   function renderDisplayStatic(){
@@ -398,9 +438,17 @@
     dpRafId = requestAnimationFrame(dpTick);
   }
 
-  async function dpPoll(){
-    const fresh = await loadState(roomCode);
-    if(fresh){
+  let dpUnsub = null;
+
+  function startDisplay(){
+    showScreen('display');
+    renderDisplayStatic();
+    if(dpRafId) cancelAnimationFrame(dpRafId);
+    dpTick();
+    if(dpUnsub) dpUnsub();
+    dpUnsub = onValue(sessionRef(roomCode), (snap)=>{
+      if(!snap.exists()) return;
+      const fresh = snap.val();
       const scriptChanged = fresh.script !== state.script;
       const fontChanged = fresh.fontSize !== state.fontSize;
       const mirrorChanged = fresh.mirror !== state.mirror;
@@ -409,16 +457,7 @@
       else{
         dpDot.className = 'dp-dot' + (state.playing ? ' live' : '');
       }
-    }
-  }
-
-  function startDisplay(){
-    showScreen('display');
-    renderDisplayStatic();
-    if(dpRafId) cancelAnimationFrame(dpRafId);
-    dpTick();
-    if(dpPollTimer) clearInterval(dpPollTimer);
-    dpPollTimer = setInterval(dpPoll, 700);
+    }, (err)=>console.error('display listener error', err));
     if(document.documentElement.requestFullscreen){
       document.documentElement.requestFullscreen().catch(()=>{});
     }
@@ -433,7 +472,7 @@
   $('dpExit').addEventListener('click', (e)=>{
     e.stopPropagation();
     if(document.fullscreenElement) document.exitFullscreen().catch(()=>{});
-    if(dpPollTimer) clearInterval(dpPollTimer);
+    if(dpUnsub){ dpUnsub(); dpUnsub = null; }
     if(dpRafId) cancelAnimationFrame(dpRafId);
     showScreen('setup');
   });
