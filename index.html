@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="he">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>טלפרומפטר</title>
+<style>
+  :root{
+    --void:#0A0B0D;
+    --panel:#17181C;
+    --panel-raised:#1F2126;
+    --hairline:#2B2E34;
+    --text:#F2F1EC;
+    --text-dim:#8B8D93;
+    --tally:#E8342A;
+    --tally-dim:#5A1712;
+    --amber:#E8A93A;
+    --mono: 'JetBrains Mono', 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{
+    margin:0; padding:0; height:100%; width:100%;
+    background:var(--void); color:var(--text);
+    font-family:var(--sans);
+    overflow:hidden;
+    -webkit-user-select:none; user-select:none;
+  }
+  button{font-family:inherit; -webkit-user-select:none; user-select:none;}
+  input{font-family:inherit;}
+
+  .screen{
+    position:fixed; inset:0; display:none;
+    flex-direction:column; align-items:center;
+  }
+  .screen.active{display:flex;}
+
+  /* ---------- SETUP ---------- */
+  #setup{justify-content:center; padding:32px; gap:28px;}
+  .brand{text-align:center;}
+  .brand .mark{
+    font-family:var(--mono); font-size:11px; letter-spacing:0.28em;
+    color:var(--tally); text-transform:uppercase;
+  }
+  .brand h1{
+    margin:6px 0 0; font-size:34px; font-weight:700; letter-spacing:-0.01em;
+  }
+  .brand p{margin:8px 0 0; color:var(--text-dim); font-size:14px; line-height:1.6; max-width:320px;}
+
+  .code-block{
+    background:var(--panel); border:1px solid var(--hairline); border-radius:16px;
+    padding:20px; width:100%; max-width:360px; display:flex; flex-direction:column; gap:12px;
+  }
+  .code-label{font-family:var(--mono); font-size:11px; letter-spacing:0.18em; color:var(--text-dim); text-transform:uppercase;}
+  .code-row{display:flex; gap:10px;}
+  #codeInput{
+    flex:1; background:var(--void); border:1px solid var(--hairline); border-radius:10px;
+    color:var(--text); font-family:var(--mono); font-size:24px; letter-spacing:0.3em;
+    text-align:center; padding:12px 8px; text-transform:uppercase; min-width:0;
+  }
+  #codeInput:focus{outline:none; border-color:var(--amber);}
+  .btn-generate{
+    background:var(--panel-raised); border:1px solid var(--hairline); color:var(--text);
+    border-radius:10px; padding:0 16px; font-size:13px; font-weight:600; cursor:pointer;
+  }
+  .btn-generate:active{background:var(--hairline);}
+
+  .role-row{display:flex; gap:12px; width:100%; max-width:360px;}
+  .role-btn{
+    flex:1; background:var(--panel); border:1px solid var(--hairline); border-radius:16px;
+    padding:22px 12px; display:flex; flex-direction:column; align-items:center; gap:10px;
+    cursor:pointer; color:var(--text);
+  }
+  .role-btn:active{background:var(--panel-raised);}
+  .role-btn svg{width:30px; height:30px; stroke:var(--text); opacity:0.9;}
+  .role-btn .role-title{font-weight:700; font-size:15px;}
+  .role-btn .role-sub{font-family:var(--mono); font-size:10px; color:var(--text-dim); letter-spacing:0.1em;}
+  .role-btn:disabled{opacity:0.35; pointer-events:none;}
+
+  #setupError{color:var(--tally); font-size:13px; font-family:var(--mono); min-height:16px;}
+
+  /* ---------- DISPLAY ---------- */
+  #display{background:#000; justify-content:flex-start; cursor:none;}
+  .dp-mirror{width:100%; height:100%; overflow:hidden; position:relative;}
+  .dp-scroll{
+    position:absolute; left:0; right:0; will-change:transform;
+    padding:0 6vw;
+  }
+  .dp-text{
+    max-width:1000px; margin:0 auto; text-align:center;
+    font-weight:700; line-height:1.5; color:var(--text);
+    white-space:pre-wrap; word-wrap:break-word;
+  }
+  .dp-spacer{width:100%;}
+
+  .dp-hud{
+    position:fixed; inset:0; pointer-events:none;
+    display:flex; align-items:flex-start; justify-content:space-between;
+    padding:20px 24px; opacity:0; transition:opacity .4s;
+  }
+  .dp-hud.show{opacity:1;}
+  .dp-tally{display:flex; align-items:center; gap:8px; font-family:var(--mono); font-size:11px; color:var(--text-dim); letter-spacing:.15em;}
+  .dp-dot{width:9px; height:9px; border-radius:50%; background:var(--tally-dim); flex-shrink:0;}
+  .dp-dot.live{background:var(--tally); box-shadow:0 0 10px var(--tally); animation:pulse 1.4s ease-in-out infinite;}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.45;}}
+  .dp-exit{
+    pointer-events:all; background:rgba(23,24,28,.85); border:1px solid var(--hairline);
+    color:var(--text-dim); border-radius:10px; padding:8px 14px; font-family:var(--mono);
+    font-size:11px; letter-spacing:.1em; cursor:pointer;
+  }
+
+  /* ---------- REMOTE ---------- */
+  #remote{justify-content:flex-start; overflow-y:auto; -webkit-overflow-scrolling:touch;}
+  .rm-wrap{width:100%; max-width:440px; margin:0 auto; padding:20px 20px 40px; display:flex; flex-direction:column; gap:18px;}
+  .rm-header{display:flex; align-items:center; justify-content:space-between;}
+  .rm-header .code-chip{
+    font-family:var(--mono); font-size:13px; letter-spacing:.2em; color:var(--amber);
+    background:var(--panel); border:1px solid var(--hairline); border-radius:8px; padding:6px 10px;
+  }
+  .rm-header .conn{display:flex; align-items:center; gap:6px; font-family:var(--mono); font-size:10px; color:var(--text-dim); letter-spacing:.1em;}
+  .conn-dot{width:7px; height:7px; border-radius:50%; background:#3EAE5C;}
+
+  .panel{background:var(--panel); border:1px solid var(--hairline); border-radius:16px; padding:16px;}
+  .panel-label{font-family:var(--mono); font-size:10px; letter-spacing:.16em; color:var(--text-dim); text-transform:uppercase; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center;}
+  .link-btn{background:none; border:none; color:var(--amber); font-family:var(--mono); font-size:10px; letter-spacing:.1em; cursor:pointer; padding:2px 4px;}
+
+  #scriptArea{
+    width:100%; min-height:110px; max-height:220px; background:var(--void); color:var(--text);
+    border:1px solid var(--hairline); border-radius:10px; padding:10px; font-size:14px; line-height:1.6;
+    resize:vertical; text-align:right; direction:auto;
+  }
+  #scriptArea:focus{outline:none; border-color:var(--amber);}
+
+  .transport{display:flex; align-items:center; justify-content:center; padding:14px 0 6px;}
+  .play-btn{
+    width:104px; height:104px; border-radius:50%; border:3px solid var(--hairline);
+    background:var(--panel-raised); display:flex; align-items:center; justify-content:center;
+    cursor:pointer; position:relative; transition:border-color .2s, background .2s;
+  }
+  .play-btn.playing{border-color:var(--tally); background:radial-gradient(circle,rgba(232,52,42,.18),transparent 70%);}
+  .play-btn svg{width:34px; height:34px; fill:var(--text);}
+  .play-btn .ring{
+    position:absolute; inset:-3px; border-radius:50%; border:2px solid var(--tally);
+    opacity:0; animation:none;
+  }
+  .play-btn.playing .ring{opacity:1; animation:pulse 1.4s ease-in-out infinite;}
+
+  .knob-wrap{display:flex; flex-direction:column; align-items:center; gap:8px; padding:6px 0 2px;}
+  #speedKnob{touch-action:none; cursor:pointer;}
+  .speed-readout{font-family:var(--mono); font-size:22px; color:var(--amber); letter-spacing:.05em;}
+  .speed-readout span{font-size:11px; color:var(--text-dim); margin-right:6px;}
+
+  .row2{display:flex; gap:12px;}
+  .row2 .panel{flex:1; display:flex; flex-direction:column; align-items:center; gap:8px; padding:14px 10px;}
+  .stepper{display:flex; align-items:center; gap:14px;}
+  .step-btn{
+    width:34px; height:34px; border-radius:8px; background:var(--panel-raised); border:1px solid var(--hairline);
+    color:var(--text); font-size:18px; display:flex; align-items:center; justify-content:center; cursor:pointer;
+  }
+  .step-btn:active{background:var(--hairline);}
+  .step-val{font-family:var(--mono); font-size:13px; color:var(--text-dim); min-width:34px; text-align:center;}
+
+  .toggle{
+    width:46px; height:26px; border-radius:20px; background:var(--void); border:1px solid var(--hairline);
+    position:relative; cursor:pointer;
+  }
+  .toggle .knob-dot{position:absolute; top:2px; left:2px; width:20px; height:20px; border-radius:50%; background:var(--text-dim); transition:transform .18s, background .18s;}
+  .toggle.on{border-color:var(--amber);}
+  .toggle.on .knob-dot{transform:translateX(20px); background:var(--amber);}
+
+  .restart-btn{
+    width:100%; background:var(--panel); border:1px solid var(--hairline); color:var(--text-dim);
+    border-radius:12px; padding:12px; font-family:var(--mono); font-size:11px; letter-spacing:.14em;
+    text-transform:uppercase; cursor:pointer;
+  }
+  .restart-btn:active{background:var(--panel-raised); color:var(--text);}
+
+  .go-display{
+    width:100%; background:var(--tally); border:none; color:#fff; border-radius:12px;
+    padding:14px; font-size:14px; font-weight:700; cursor:pointer; letter-spacing:.02em;
+  }
+</style>
+</head>
+<body>
+
+<!-- ================= SETUP ================= -->
+<div id="setup" class="screen active">
+  <div class="brand">
+    <div class="mark">BROADCAST CONTROL</div>
+    <h1>טלפרומפטר</h1>
+    <p>אייפד אחד מציג את הטקסט, טלפון אחר שולט במהירות ובגלילה. חברו את שני המכשירים עם אותו קוד.</p>
+  </div>
+
+  <div class="code-block">
+    <div class="code-label">קוד חיבור</div>
+    <div class="code-row">
+      <input id="codeInput" maxlength="4" placeholder="0000" inputmode="numeric">
+      <button class="btn-generate" id="genBtn">צור קוד</button>
+    </div>
+  </div>
+
+  <div class="role-row">
+    <button class="role-btn" id="displayRoleBtn">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 20h8" stroke-linecap="round"/></svg>
+      <div class="role-title">מסך תצוגה</div>
+      <div class="role-sub">אייפד</div>
+    </button>
+    <button class="role-btn" id="remoteRoleBtn">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6"><rect x="7" y="2" width="10" height="20" rx="2.2"/><path d="M11 19h2" stroke-linecap="round"/></svg>
+      <div class="role-title">שלט</div>
+      <div class="role-sub">טלפון</div>
+    </button>
+  </div>
+  <div id="setupError"></div>
+</div>
+
+<!-- ================= DISPLAY ================= -->
+<div id="display" class="screen">
+  <div class="dp-mirror" id="dpMirror">
+    <div class="dp-scroll" id="dpScroll">
+      <div class="dp-spacer" id="dpSpacerTop"></div>
+      <div class="dp-text" id="dpText"></div>
+      <div class="dp-spacer" id="dpSpacerBottom" style="height:60vh;"></div>
+    </div>
+  </div>
+  <div class="dp-hud" id="dpHud">
+    <div class="dp-tally"><span class="dp-dot" id="dpDot"></span><span id="dpCodeLabel">----</span></div>
+    <button class="dp-exit" id="dpExit">יציאה</button>
+  </div>
+</div>
+
+<!-- ================= REMOTE ================= -->
+<div id="remote" class="screen">
+  <div class="rm-wrap">
+    <div class="rm-header">
+      <div class="code-chip" id="rmCodeChip">----</div>
+      <div class="conn"><span class="conn-dot"></span>מחובר</div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-label">
+        <span>טקסט</span>
+        <button class="link-btn" id="scriptToggle">ערוך</button>
+      </div>
+      <textarea id="scriptArea" style="display:none;" placeholder="הדביקו כאן את הטקסט להקראה…"></textarea>
+      <div id="scriptPreview" style="font-size:13px; color:var(--text-dim); line-height:1.6; max-height:60px; overflow:hidden;"></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-label"><span>נגינה</span></div>
+      <div class="transport">
+        <button class="play-btn" id="playBtn" aria-label="נגן או השהה">
+          <div class="ring"></div>
+          <svg id="playIcon" viewBox="0 0 24 24"><polygon points="6,4 20,12 6,20"/></svg>
+        </button>
+      </div>
+      <div class="knob-wrap">
+        <svg id="speedKnob" width="120" height="120" viewBox="0 0 120 120">
+          <circle cx="60" cy="60" r="52" fill="var(--void)" stroke="var(--hairline)" stroke-width="2"/>
+          <path id="knobArc" d="" fill="none" stroke="var(--amber)" stroke-width="4" stroke-linecap="round"/>
+          <g id="knobHandle">
+            <circle cx="60" cy="16" r="5" fill="var(--text)"/>
+          </g>
+        </svg>
+        <div class="speed-readout"><span>מהירות</span><span id="speedVal">40</span></div>
+      </div>
+    </div>
+
+    <div class="row2">
+      <div class="panel">
+        <div class="panel-label" style="margin-bottom:2px;">גודל טקסט</div>
+        <div class="stepper">
+          <button class="step-btn" id="fontMinus">−</button>
+          <span class="step-val" id="fontVal">48</span>
+          <button class="step-btn" id="fontPlus">+</button>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-label" style="margin-bottom:2px;">מראה (הפוך)</div>
+        <div class="toggle" id="mirrorToggle"><div class="knob-dot"></div></div>
+      </div>
+    </div>
+
+    <button class="restart-btn" id="restartBtn">↺ התחל מחדש</button>
+    <button class="go-display" id="rmToDisplayBtn">פתח גם כאן כמסך תצוגה</button>
+  </div>
+</div>
+
+<script>
+(function(){
+  const $ = id => document.getElementById(id);
+  let roomCode = null;
+  let role = null; // 'display' | 'remote'
+  let state = null; // last known synced state
+  let lastFetchOk = false;
+
+  const DEFAULT_STATE = () => ({
+    script: 'הדביקו כאן את הטקסט שלכם.\n\nהמסך יגלול אוטומטית לפי המהירות שתקבעו בשלט.',
+    speed: 40,        // px per second
+    fontSize: 48,
+    mirror: false,
+    playing: false,
+    offset: 0,         // px scrolled at last state change
+    startTime: 0,       // epoch ms when playback last (re)started
+    updatedAt: Date.now()
+  });
+
+  function keyFor(code){ return 'tp:' + code; }
+
+  function computePos(s){
+    if(!s) return 0;
+    if(s.playing){
+      return s.offset + (Date.now() - s.startTime) * (s.speed/1000);
+    }
+    return s.offset;
+  }
+
+  async function loadState(code){
+    try{
+      const res = await window.storage.get(keyFor(code), true);
+      if(res && res.value){ return JSON.parse(res.value); }
+      return null;
+    }catch(e){ return null; }
+  }
+  async function saveState(code, s){
+    try{
+      s.updatedAt = Date.now();
+      await window.storage.set(keyFor(code), JSON.stringify(s), true);
+      return true;
+    }catch(e){ return false; }
+  }
+
+  // ---------------- SETUP SCREEN ----------------
+  const codeInput = $('codeInput');
+  const setupError = $('setupError');
+
+  $('genBtn').addEventListener('click', ()=>{
+    codeInput.value = String(Math.floor(1000 + Math.random()*9000));
+  });
+  codeInput.addEventListener('input', ()=>{
+    codeInput.value = codeInput.value.replace(/\D/g,'').slice(0,4);
+  });
+
+  function showScreen(id){
+    document.querySelectorAll('.screen').forEach(el=>el.classList.remove('active'));
+    $(id).classList.add('active');
+  }
+
+  async function enterAs(chosenRole){
+    const code = codeInput.value.trim();
+    if(code.length !== 4){
+      setupError.textContent = 'הזינו קוד בן 4 ספרות, או לחצו "צור קוד"';
+      return;
+    }
+    setupError.textContent = '';
+    roomCode = code;
+    role = chosenRole;
+
+    let existing = await loadState(roomCode);
+    if(!existing){
+      existing = DEFAULT_STATE();
+      await saveState(roomCode, existing);
+    }
+    state = existing;
+
+    if(role === 'display'){
+      startDisplay();
+    } else {
+      startRemote();
+    }
+  }
+
+  $('displayRoleBtn').addEventListener('click', ()=>enterAs('display'));
+  $('remoteRoleBtn').addEventListener('click', ()=>enterAs('remote'));
+
+  // ---------------- DISPLAY ----------------
+  const dpText = $('dpText');
+  const dpScroll = $('dpScroll');
+  const dpMirror = $('dpMirror');
+  const dpDot = $('dpDot');
+  const dpHud = $('dpHud');
+  const dpCodeLabel = $('dpCodeLabel');
+  let dpPollTimer = null;
+  let dpRafId = null;
+
+  function renderDisplayStatic(){
+    dpText.textContent = state.script;
+    dpText.style.fontSize = state.fontSize + 'px';
+    dpMirror.style.transform = state.mirror ? 'scaleX(-1)' : 'scaleX(1)';
+    dpDot.className = 'dp-dot' + (state.playing ? ' live' : '');
+    dpCodeLabel.textContent = roomCode;
+    $('dpSpacerTop').style.height = window.innerHeight + 'px';
+  }
+
+  function dpTick(){
+    const pos = computePos(state);
+    dpScroll.style.transform = 'translateY(' + (-pos) + 'px)';
+    dpRafId = requestAnimationFrame(dpTick);
+  }
+
+  async function dpPoll(){
+    const fresh = await loadState(roomCode);
+    if(fresh){
+      const scriptChanged = fresh.script !== state.script;
+      const fontChanged = fresh.fontSize !== state.fontSize;
+      const mirrorChanged = fresh.mirror !== state.mirror;
+      state = fresh;
+      if(scriptChanged || fontChanged || mirrorChanged){ renderDisplayStatic(); }
+      else{
+        dpDot.className = 'dp-dot' + (state.playing ? ' live' : '');
+      }
+    }
+  }
+
+  function startDisplay(){
+    showScreen('display');
+    renderDisplayStatic();
+    if(dpRafId) cancelAnimationFrame(dpRafId);
+    dpTick();
+    if(dpPollTimer) clearInterval(dpPollTimer);
+    dpPollTimer = setInterval(dpPoll, 700);
+    if(document.documentElement.requestFullscreen){
+      document.documentElement.requestFullscreen().catch(()=>{});
+    }
+  }
+
+  let hudTimeout = null;
+  $('display').addEventListener('click', ()=>{
+    dpHud.classList.add('show');
+    clearTimeout(hudTimeout);
+    hudTimeout = setTimeout(()=>dpHud.classList.remove('show'), 2500);
+  });
+  $('dpExit').addEventListener('click', (e)=>{
+    e.stopPropagation();
+    if(document.fullscreenElement) document.exitFullscreen().catch(()=>{});
+    if(dpPollTimer) clearInterval(dpPollTimer);
+    if(dpRafId) cancelAnimationFrame(dpRafId);
+    showScreen('setup');
+  });
+
+  // ---------------- REMOTE ----------------
+  let rmPollTimer = null;
+
+  function startRemote(){
+    showScreen('remote');
+    $('rmCodeChip').textContent = roomCode;
+    $('scriptArea').value = state.script;
+    updateScriptPreview();
+    $('speedVal').textContent = Math.round(state.speed);
+    $('fontVal').textContent = state.fontSize;
+    setMirrorUI(state.mirror);
+    setPlayingUI(state.playing);
+    updateKnob(state.speed);
+    if(rmPollTimer) clearInterval(rmPollTimer);
+    rmPollTimer = setInterval(async ()=>{
+      const fresh = await loadState(roomCode);
+      if(fresh && !editingScript){
+        state = fresh;
+      }
+    }, 3000);
+  }
+
+  function updateScriptPreview(){
+    const p = $('scriptPreview');
+    p.textContent = state.script.slice(0, 120) + (state.script.length > 120 ? '…' : '');
+  }
+
+  let editingScript = false;
+  $('scriptToggle').addEventListener('click', ()=>{
+    editingScript = !editingScript;
+    const ta = $('scriptArea');
+    const prev = $('scriptPreview');
+    if(editingScript){
+      ta.style.display = 'block';
+      prev.style.display = 'none';
+      $('scriptToggle').textContent = 'סיום';
+      ta.focus();
+    } else {
+      ta.style.display = 'none';
+      prev.style.display = 'block';
+      $('scriptToggle').textContent = 'ערוך';
+      const newScript = ta.value;
+      if(newScript !== state.script){
+        state.script = newScript;
+        state.offset = 0;
+        state.startTime = state.playing ? Date.now() : 0;
+        updateScriptPreview();
+        saveState(roomCode, state);
+      }
+    }
+  });
+
+  function setPlayingUI(playing){
+    const btn = $('playBtn');
+    const icon = $('playIcon');
+    btn.classList.toggle('playing', playing);
+    icon.innerHTML = playing
+      ? '<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>'
+      : '<polygon points="6,4 20,12 6,20"/>';
+  }
+
+  $('playBtn').addEventListener('click', ()=>{
+    const pos = computePos(state);
+    state.offset = pos;
+    state.playing = !state.playing;
+    state.startTime = state.playing ? Date.now() : 0;
+    setPlayingUI(state.playing);
+    saveState(roomCode, state);
+  });
+
+  $('restartBtn').addEventListener('click', ()=>{
+    state.offset = 0;
+    state.startTime = state.playing ? Date.now() : 0;
+    saveState(roomCode, state);
+  });
+
+  function setMirrorUI(on){
+    $('mirrorToggle').classList.toggle('on', on);
+  }
+  $('mirrorToggle').addEventListener('click', ()=>{
+    state.mirror = !state.mirror;
+    setMirrorUI(state.mirror);
+    saveState(roomCode, state);
+  });
+
+  $('fontMinus').addEventListener('click', ()=>{
+    state.fontSize = Math.max(20, state.fontSize - 4);
+    $('fontVal').textContent = state.fontSize;
+    saveState(roomCode, state);
+  });
+  $('fontPlus').addEventListener('click', ()=>{
+    state.fontSize = Math.min(120, state.fontSize + 4);
+    $('fontVal').textContent = state.fontSize;
+    saveState(roomCode, state);
+  });
+
+  $('rmToDisplayBtn').addEventListener('click', ()=>{
+    if(rmPollTimer) clearInterval(rmPollTimer);
+    role = 'display';
+    startDisplay();
+  });
+
+  // ---- speed knob (rotary) ----
+  const KNOB_MIN = 5, KNOB_MAX = 220;
+  const ANGLE_MIN = -135, ANGLE_MAX = 135;
+  const knobSvg = $('speedKnob');
+  const knobArc = $('knobArc');
+  const knobHandle = $('knobHandle');
+
+  function speedToAngle(v){
+    const t = (v - KNOB_MIN) / (KNOB_MAX - KNOB_MIN);
+    return ANGLE_MIN + t * (ANGLE_MAX - ANGLE_MIN);
+  }
+  function describeArc(angleDeg){
+    const cx=60, cy=60, r=52;
+    const startAngle = ANGLE_MIN - 90;
+    const endAngle = angleDeg - 90;
+    const toXY = (deg)=>{
+      const rad = deg * Math.PI/180;
+      return [cx + r*Math.cos(rad), cy + r*Math.sin(rad)];
+    };
+    const [sx, sy] = toXY(startAngle);
+    const [ex, ey] = toXY(endAngle);
+    const largeArc = (angleDeg - ANGLE_MIN) > 180 ? 1 : 0;
+    return `M ${sx} ${sy} A ${r} ${r} 0 ${largeArc} 1 ${ex} ${ey}`;
+  }
+  function updateKnob(v){
+    const angle = speedToAngle(v);
+    knobArc.setAttribute('d', describeArc(angle));
+    knobHandle.setAttribute('transform', `rotate(${angle} 60 60)`);
+    $('speedVal').textContent = Math.round(v);
+  }
+
+  let dragging = false;
+  function angleFromEvent(e){
+    const rect = knobSvg.getBoundingClientRect();
+    const cx = rect.left + rect.width/2;
+    const cy = rect.top + rect.height/2;
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    let deg = Math.atan2(clientX - cx, -(clientY - cy)) * 180/Math.PI;
+    deg = Math.max(ANGLE_MIN, Math.min(ANGLE_MAX, deg));
+    return deg;
+  }
+  function angleToSpeed(deg){
+    const t = (deg - ANGLE_MIN) / (ANGLE_MAX - ANGLE_MIN);
+    return KNOB_MIN + t * (KNOB_MAX - KNOB_MIN);
+  }
+  function onKnobMove(e){
+    if(!dragging) return;
+    e.preventDefault();
+    const deg = angleFromEvent(e);
+    const speed = angleToSpeed(deg);
+    updateKnob(speed);
+    const pos = computePos(state);
+    state.offset = pos;
+    state.startTime = state.playing ? Date.now() : 0;
+    state.speed = speed;
+  }
+  function onKnobEnd(){
+    if(!dragging) return;
+    dragging = false;
+    saveState(roomCode, state);
+  }
+  knobSvg.addEventListener('pointerdown', (e)=>{ dragging = true; onKnobMove(e); });
+  window.addEventListener('pointermove', onKnobMove);
+  window.addEventListener('pointerup', onKnobEnd);
+  knobSvg.addEventListener('touchstart', (e)=>{ dragging = true; onKnobMove(e); }, {passive:false});
+  window.addEventListener('touchmove', onKnobMove, {passive:false});
+  window.addEventListener('touchend', onKnobEnd);
+
+})();
+</script>
+</body>
+</html>
