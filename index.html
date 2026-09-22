@@ -129,8 +129,20 @@
     font-family:var(--mono); font-size:13px; letter-spacing:.2em; color:var(--amber);
     background:var(--panel); border:1px solid var(--hairline); border-radius:8px; padding:6px 10px;
   }
-  .rm-header .conn{display:flex; align-items:center; gap:6px; font-family:var(--mono); font-size:10px; color:var(--text-dim); letter-spacing:.1em;}
-  .conn-dot{width:7px; height:7px; border-radius:50%; background:#3EAE5C;}
+  .saved-text-row{
+    display:flex; align-items:center; gap:8px; background:var(--void);
+    border:1px solid var(--hairline); border-radius:10px; padding:8px 10px;
+  }
+  .saved-text-row .std-name{
+    flex:1; font-size:13px; color:var(--text); overflow:hidden; text-overflow:ellipsis;
+    white-space:nowrap; cursor:pointer; text-align:right; min-width:0;
+  }
+  .saved-text-row .std-btn{
+    background:none; border:none; color:var(--text-dim); font-family:var(--mono);
+    font-size:12px; cursor:pointer; padding:4px 6px; flex-shrink:0;
+  }
+  .saved-text-row .std-btn.del{color:var(--tally);}
+  .saved-texts-empty{font-size:12px; color:var(--text-dim); text-align:center; padding:6px 0;}
 
   .panel{background:var(--panel); border:1px solid var(--hairline); border-radius:16px; padding:16px;}
   .panel-label{font-family:var(--mono); font-size:10px; letter-spacing:.16em; color:var(--text-dim); text-transform:uppercase; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center;}
@@ -247,7 +259,6 @@
   <div class="rm-wrap">
     <div class="rm-header">
       <div class="code-chip" id="rmCodeChip">----</div>
-      <div class="conn"><span class="conn-dot"></span>מחובר</div>
     </div>
 
     <div class="panel">
@@ -257,6 +268,17 @@
       </div>
       <textarea id="scriptArea" style="display:none;" placeholder="הדביקו כאן את הטקסט להקראה…"></textarea>
       <div id="scriptPreview" style="font-size:13px; color:var(--text-dim); line-height:1.6; max-height:60px; overflow:hidden;"></div>
+
+      <div id="savedTextsBlock" style="margin-top:14px; padding-top:12px; border-top:1px solid var(--hairline); display:flex; flex-direction:column; gap:10px;">
+        <div class="panel-label" style="margin-bottom:0;">
+          <span>טקסטים שמורים</span>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <input id="saveNameInput" placeholder="שם לטקסט הנוכחי…" style="flex:1; background:var(--void); border:1px solid var(--hairline); border-radius:8px; color:var(--text); padding:8px 10px; font-size:13px; text-align:right; min-width:0;">
+          <button class="btn-generate" id="saveTextBtn" style="padding:0 14px;">שמור</button>
+        </div>
+        <div id="savedTextsList" style="display:flex; flex-direction:column; gap:6px;"></div>
+      </div>
     </div>
 
     <div class="panel">
@@ -294,7 +316,10 @@
       </div>
     </div>
 
-    <button class="restart-btn" id="restartBtn">↺ התחל מחדש</button>
+    <div style="display:flex; gap:10px;">
+      <button class="restart-btn" id="rewindBtn" style="flex:1;">⏪ קצת אחורה</button>
+      <button class="restart-btn" id="restartBtn" style="flex:1;">↺ מהתחלה</button>
+    </div>
     <button class="go-display" id="rmToDisplayBtn">פתח גם כאן כמסך תצוגה</button>
   </div>
 </div>
@@ -434,6 +459,12 @@ const db = getDatabase(fbApp);
   const dpHud = $('dpHud');
   const dpCodeLabel = $('dpCodeLabel');
   let dpRafId = null;
+  // The position actually drawn on screen. Kept separate from the
+  // time-computed target so that when a correction arrives (e.g. after
+  // pressing pause, once the network round-trip catches up), the screen
+  // can ease into the corrected spot instead of snapping there in one
+  // frame — that snap was the "delay/glitch" feeling on stop.
+  let dpVisualOffset = 0;
 
   function renderDisplayStatic(){
     dpText.textContent = state.script;
@@ -449,8 +480,24 @@ const db = getDatabase(fbApp);
   }
 
   function dpTick(){
-    const pos = computePos(state);
-    dpScroll.style.transform = 'translateY(' + (-pos) + 'px)';
+    const target = computePos(state);
+    if(state && state.playing){
+      // While actively scrolling, the target is smooth and predictable
+      // (time * speed), so draw it exactly — no smoothing needed.
+      dpVisualOffset = target;
+    } else {
+      // While paused, the target only moves when a correction arrives
+      // from the remote (which can lag a bit behind the click). Ease
+      // toward it instead of jumping, so a late correction reads as a
+      // small smooth settle rather than a stutter.
+      const delta = target - dpVisualOffset;
+      if(Math.abs(delta) < 0.5){
+        dpVisualOffset = target;
+      } else {
+        dpVisualOffset += delta * 0.2;
+      }
+    }
+    dpScroll.style.transform = 'translateY(' + (-dpVisualOffset) + 'px)';
     dpRafId = requestAnimationFrame(dpTick);
   }
 
@@ -459,6 +506,7 @@ const db = getDatabase(fbApp);
   function startDisplay(){
     showScreen('display');
     renderDisplayStatic();
+    dpVisualOffset = computePos(state); // start drawn position exactly on target, no ease-in from 0
     if(dpRafId) cancelAnimationFrame(dpRafId);
     dpTick();
     if(dpUnsub) dpUnsub();
@@ -493,6 +541,77 @@ const db = getDatabase(fbApp);
     showScreen('setup');
   });
 
+  // ---------------- SAVED TEXTS (library of scripts, kept on this phone) ----------------
+  const SAVED_TEXTS_KEY = 'teleprompter_saved_texts';
+
+  function loadSavedTexts(){
+    try{
+      const raw = localStorage.getItem(SAVED_TEXTS_KEY);
+      const list = raw ? JSON.parse(raw) : [];
+      return Array.isArray(list) ? list : [];
+    }catch(e){ console.error('loadSavedTexts failed', e); return []; }
+  }
+  function writeSavedTexts(list){
+    try{ localStorage.setItem(SAVED_TEXTS_KEY, JSON.stringify(list)); }
+    catch(e){ console.error('writeSavedTexts failed', e); }
+  }
+
+  function renderSavedTexts(){
+    const wrap = $('savedTextsList');
+    const list = loadSavedTexts();
+    wrap.innerHTML = '';
+    if(list.length === 0){
+      const empty = document.createElement('div');
+      empty.className = 'saved-texts-empty';
+      empty.textContent = 'אין עדיין טקסטים שמורים';
+      wrap.appendChild(empty);
+      return;
+    }
+    list.slice().reverse().forEach(item=>{
+      const row = document.createElement('div');
+      row.className = 'saved-text-row';
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'std-name';
+      nameEl.textContent = item.name;
+      nameEl.title = 'לחצו לטעינה';
+      nameEl.addEventListener('click', ()=>{
+        state.script = item.text;
+        state.offset = 0;
+        state.startTime = state.playing ? Date.now() : 0;
+        $('scriptArea').value = state.script;
+        updateScriptPreview();
+        saveState(roomCode, state);
+      });
+
+      const delBtn = document.createElement('button');
+      delBtn.className = 'std-btn del';
+      delBtn.textContent = '✕';
+      delBtn.title = 'מחיקה';
+      delBtn.addEventListener('click', (e)=>{
+        e.stopPropagation();
+        const updated = loadSavedTexts().filter(x=>x.id !== item.id);
+        writeSavedTexts(updated);
+        renderSavedTexts();
+      });
+
+      row.appendChild(nameEl);
+      row.appendChild(delBtn);
+      wrap.appendChild(row);
+    });
+  }
+
+  $('saveTextBtn').addEventListener('click', ()=>{
+    const nameInput = $('saveNameInput');
+    const currentText = (editingScript ? $('scriptArea').value : state.script) || '';
+    const name = nameInput.value.trim() || currentText.slice(0, 24).trim() || 'ללא שם';
+    const list = loadSavedTexts();
+    list.push({ id: 'st_' + Date.now() + '_' + Math.floor(Math.random()*1000), name, text: currentText });
+    writeSavedTexts(list);
+    nameInput.value = '';
+    renderSavedTexts();
+  });
+
   // ---------------- REMOTE ----------------
   let rmPollTimer = null;
 
@@ -506,6 +625,7 @@ const db = getDatabase(fbApp);
     setMirrorUI(state.mirror);
     setPlayingUI(state.playing);
     updateKnob(state.speed);
+    renderSavedTexts();
     if(rmPollTimer) clearInterval(rmPollTimer);
     rmPollTimer = setInterval(async ()=>{
       const fresh = await loadState(roomCode);
@@ -577,6 +697,20 @@ const db = getDatabase(fbApp);
 
   $('restartBtn').addEventListener('click', ()=>{
     state.offset = 0;
+    state.startTime = state.playing ? Date.now() : 0;
+    saveState(roomCode, state);
+  });
+
+  // Step back ~3 seconds' worth of scroll at the current speed (with a
+  // floor so it's still noticeable even at very slow speeds). Works
+  // whether playing or paused — if playing, startTime is reset so
+  // playback continues forward from the new, earlier position.
+  const REWIND_SECONDS = 3;
+  const REWIND_MIN_PX = 60;
+  $('rewindBtn').addEventListener('click', ()=>{
+    const pos = computePos(state);
+    const rewindPx = Math.max(REWIND_MIN_PX, state.speed * REWIND_SECONDS);
+    state.offset = Math.max(0, pos - rewindPx);
     state.startTime = state.playing ? Date.now() : 0;
     saveState(roomCode, state);
   });
