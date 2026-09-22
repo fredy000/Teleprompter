@@ -142,6 +142,8 @@
     font-size:12px; cursor:pointer; padding:4px 6px; flex-shrink:0;
   }
   .saved-text-row .std-btn.del{color:var(--tally);}
+  .saved-text-row.active{border-color:var(--amber);}
+  .saved-text-row.active .std-name{color:var(--amber); font-weight:700;}
   .saved-texts-empty{font-size:12px; color:var(--text-dim); text-align:center; padding:6px 0;}
 
   .panel{background:var(--panel); border:1px solid var(--hairline); border-radius:16px; padding:16px;}
@@ -266,16 +268,18 @@
         <span>טקסט</span>
         <button class="link-btn" id="scriptToggle">ערוך</button>
       </div>
+      <input id="pageTitleInput" placeholder="כותרת לעמוד…" style="width:100%; background:var(--void); border:1px solid var(--hairline); border-radius:8px; color:var(--text); padding:8px 10px; font-size:13px; text-align:right; margin-bottom:8px;">
       <textarea id="scriptArea" style="display:none;" placeholder="הדביקו כאן את הטקסט להקראה…"></textarea>
       <div id="scriptPreview" style="font-size:13px; color:var(--text-dim); line-height:1.6; max-height:60px; overflow:hidden;"></div>
 
+      <div style="display:flex; gap:8px; margin-top:10px;">
+        <button class="btn-generate" id="saveTextBtn" style="flex:1;">💾 שמור עמוד</button>
+        <button class="btn-generate" id="newPageBtn" style="flex:1;">📄 עמוד חדש</button>
+      </div>
+
       <div id="savedTextsBlock" style="margin-top:14px; padding-top:12px; border-top:1px solid var(--hairline); display:flex; flex-direction:column; gap:10px;">
         <div class="panel-label" style="margin-bottom:0;">
-          <span>טקסטים שמורים</span>
-        </div>
-        <div style="display:flex; gap:8px;">
-          <input id="saveNameInput" placeholder="שם לטקסט הנוכחי…" style="flex:1; background:var(--void); border:1px solid var(--hairline); border-radius:8px; color:var(--text); padding:8px 10px; font-size:13px; text-align:right; min-width:0;">
-          <button class="btn-generate" id="saveTextBtn" style="padding:0 14px;">שמור</button>
+          <span>מחברת (העמודים שלי)</span>
         </div>
         <div id="savedTextsList" style="display:flex; flex-direction:column; gap:6px;"></div>
       </div>
@@ -541,8 +545,14 @@ const db = getDatabase(fbApp);
     showScreen('setup');
   });
 
-  // ---------------- SAVED TEXTS (library of scripts, kept on this phone) ----------------
+  // ---------------- NOTEBOOK (pages of saved scripts, kept on this phone) ----------------
+  // Model: a list of pages [{id, name, text}] plus "which page is currently
+  // open" (currentPageId). Saving while a page is open updates that same
+  // page in place (title + text); saving with no page open creates a new
+  // one. "New page" clears the editor and opens nothing, so the next save
+  // creates a fresh page instead of overwriting whatever was open before.
   const SAVED_TEXTS_KEY = 'teleprompter_saved_texts';
+  let currentPageId = null;
 
   function loadSavedTexts(){
     try{
@@ -556,6 +566,22 @@ const db = getDatabase(fbApp);
     catch(e){ console.error('writeSavedTexts failed', e); }
   }
 
+  function currentEditorText(){
+    return (editingScript ? $('scriptArea').value : state.script) || '';
+  }
+
+  function openPage(item){
+    currentPageId = item.id;
+    $('pageTitleInput').value = item.name;
+    state.script = item.text;
+    state.offset = 0;
+    state.startTime = state.playing ? Date.now() : 0;
+    $('scriptArea').value = state.script;
+    updateScriptPreview();
+    saveState(roomCode, state);
+    renderSavedTexts();
+  }
+
   function renderSavedTexts(){
     const wrap = $('savedTextsList');
     const list = loadSavedTexts();
@@ -563,35 +589,31 @@ const db = getDatabase(fbApp);
     if(list.length === 0){
       const empty = document.createElement('div');
       empty.className = 'saved-texts-empty';
-      empty.textContent = 'אין עדיין טקסטים שמורים';
+      empty.textContent = 'אין עדיין עמודים במחברת — כתבו טקסט ולחצו "שמור עמוד"';
       wrap.appendChild(empty);
       return;
     }
     list.slice().reverse().forEach(item=>{
       const row = document.createElement('div');
-      row.className = 'saved-text-row';
+      row.className = 'saved-text-row' + (item.id === currentPageId ? ' active' : '');
 
       const nameEl = document.createElement('div');
       nameEl.className = 'std-name';
       nameEl.textContent = item.name;
-      nameEl.title = 'לחצו לטעינה';
-      nameEl.addEventListener('click', ()=>{
-        state.script = item.text;
-        state.offset = 0;
-        state.startTime = state.playing ? Date.now() : 0;
-        $('scriptArea').value = state.script;
-        updateScriptPreview();
-        saveState(roomCode, state);
-      });
+      nameEl.title = 'לחצו לפתיחת העמוד';
+      nameEl.addEventListener('click', ()=> openPage(item));
 
       const delBtn = document.createElement('button');
       delBtn.className = 'std-btn del';
       delBtn.textContent = '✕';
-      delBtn.title = 'מחיקה';
+      delBtn.title = 'מחיקת עמוד';
       delBtn.addEventListener('click', (e)=>{
         e.stopPropagation();
         const updated = loadSavedTexts().filter(x=>x.id !== item.id);
         writeSavedTexts(updated);
+        if(item.id === currentPageId){
+          currentPageId = null;
+        }
         renderSavedTexts();
       });
 
@@ -602,13 +624,56 @@ const db = getDatabase(fbApp);
   }
 
   $('saveTextBtn').addEventListener('click', ()=>{
-    const nameInput = $('saveNameInput');
-    const currentText = (editingScript ? $('scriptArea').value : state.script) || '';
-    const name = nameInput.value.trim() || currentText.slice(0, 24).trim() || 'ללא שם';
+    const titleInput = $('pageTitleInput');
+    const text = currentEditorText();
     const list = loadSavedTexts();
-    list.push({ id: 'st_' + Date.now() + '_' + Math.floor(Math.random()*1000), name, text: currentText });
+
+    if(currentPageId && list.some(x=>x.id === currentPageId)){
+      // A page is already open — update it in place (title + text) rather
+      // than creating a duplicate.
+      const name = titleInput.value.trim() || text.slice(0, 24).trim() || 'ללא שם';
+      const idx = list.findIndex(x=>x.id === currentPageId);
+      list[idx] = { id: currentPageId, name, text };
+      titleInput.value = name;
+    } else {
+      const name = titleInput.value.trim() || text.slice(0, 24).trim() || 'ללא שם';
+      const newId = 'st_' + Date.now() + '_' + Math.floor(Math.random()*1000);
+      list.push({ id: newId, name, text });
+      currentPageId = newId;
+      titleInput.value = name;
+    }
     writeSavedTexts(list);
-    nameInput.value = '';
+    renderSavedTexts();
+  });
+
+  $('newPageBtn').addEventListener('click', ()=>{
+    currentPageId = null;
+    $('pageTitleInput').value = '';
+    state.script = '';
+    state.offset = 0;
+    state.startTime = state.playing ? Date.now() : 0;
+    $('scriptArea').value = '';
+    updateScriptPreview();
+    saveState(roomCode, state);
+    renderSavedTexts();
+    // Jump straight into edit mode so the person can start typing the new
+    // page right away, rather than having to press "ערוך" separately.
+    if(!editingScript){ $('scriptToggle').click(); }
+    $('scriptArea').focus();
+  });
+
+  // Renaming the title field alone (without pressing "שמור עמוד") should
+  // still rename an already-open page, so the notebook's list stays in
+  // sync with what the person sees at the top.
+  $('pageTitleInput').addEventListener('change', ()=>{
+    if(!currentPageId) return;
+    const list = loadSavedTexts();
+    const idx = list.findIndex(x=>x.id === currentPageId);
+    if(idx === -1) return;
+    const name = $('pageTitleInput').value.trim() || list[idx].name;
+    list[idx] = { ...list[idx], name };
+    $('pageTitleInput').value = name;
+    writeSavedTexts(list);
     renderSavedTexts();
   });
 
