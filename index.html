@@ -81,7 +81,19 @@
 
   /* ---------- DISPLAY ---------- */
   #display{background:#000; justify-content:flex-start; cursor:none;}
-  .dp-mirror{width:100%; height:100%; overflow:hidden; position:relative;}
+  .dp-mirror{
+    width:100%; height:100%; overflow:hidden; position:relative;
+    transform:scaleX(1);
+  }
+  /* Mirror flip is driven by this class only (never by an inline style),
+     so there is a single, unambiguous source of truth that's easy to
+     confirm in devtools ($0.classList) and that always wins over any
+     stale inline style left behind.
+     scaleY (top-to-bottom / vertical) rather than scaleX (left-to-right),
+     to match a teleprompter glass rig where the monitor lies face-up
+     under the beam-splitter and needs a vertical flip, not a horizontal
+     one, to read correctly through the glass. */
+  .dp-mirror.is-mirrored{transform:scaleY(-1);}
   .dp-scroll{
     position:absolute; left:0; right:0; will-change:transform;
     padding:0 6vw;
@@ -426,7 +438,11 @@ const db = getDatabase(fbApp);
   function renderDisplayStatic(){
     dpText.textContent = state.script;
     dpText.style.fontSize = state.fontSize + 'px';
-    dpMirror.style.transform = state.mirror ? 'scaleX(-1)' : 'scaleX(1)';
+    // Class-based flip: the ONLY thing that ever touches this element's
+    // transform, so there is nothing else to fight with and no risk of a
+    // stale inline style overriding it. !!state.mirror also tolerates the
+    // field arriving as undefined on an older/partial record.
+    dpMirror.classList.toggle('is-mirrored', !!state.mirror);
     dpDot.className = 'dp-dot' + (state.playing ? ' live' : '');
     dpCodeLabel.textContent = roomCode;
     $('dpSpacerTop').style.height = window.innerHeight + 'px';
@@ -448,15 +464,15 @@ const db = getDatabase(fbApp);
     if(dpUnsub) dpUnsub();
     dpUnsub = onValue(sessionRef(roomCode), (snap)=>{
       if(!snap.exists()) return;
-      const fresh = snap.val();
-      const scriptChanged = fresh.script !== state.script;
-      const fontChanged = fresh.fontSize !== state.fontSize;
-      const mirrorChanged = fresh.mirror !== state.mirror;
-      state = fresh;
-      if(scriptChanged || fontChanged || mirrorChanged){ renderDisplayStatic(); }
-      else{
-        dpDot.className = 'dp-dot' + (state.playing ? ' live' : '');
-      }
+      // Always take the fresh value and redraw everything, rather than
+      // diffing old-vs-new fields first and only redrawing on a detected
+      // change. That diff was the bug behind "mirror doesn't flip": a
+      // missed/incorrect comparison silently skipped the render call, so
+      // the toggle updated Firebase but the display never re-applied the
+      // transform. Redrawing unconditionally on every update is cheap
+      // (it's just a few DOM writes) and can't miss a change.
+      state = snap.val();
+      renderDisplayStatic();
     }, (err)=>console.error('display listener error', err));
     if(document.documentElement.requestFullscreen){
       document.documentElement.requestFullscreen().catch(()=>{});
@@ -495,6 +511,18 @@ const db = getDatabase(fbApp);
       const fresh = await loadState(roomCode);
       if(fresh && !editingScript){
         state = fresh;
+        // The remote's own controls (mirror toggle, font size, speed,
+        // play/pause) were being left showing stale values here after a
+        // poll replaced `state` — fixed by refreshing all of them, so the
+        // remote's UI can't drift out of sync with what the display is
+        // actually doing (e.g. if a second phone changed the mirror).
+        $('scriptArea').value = state.script;
+        updateScriptPreview();
+        setMirrorUI(state.mirror);
+        $('fontVal').textContent = state.fontSize;
+        $('speedVal').textContent = Math.round(state.speed);
+        setPlayingUI(state.playing);
+        updateKnob(state.speed);
       }
     }, 3000);
   }
@@ -554,12 +582,20 @@ const db = getDatabase(fbApp);
   });
 
   function setMirrorUI(on){
-    $('mirrorToggle').classList.toggle('on', on);
+    $('mirrorToggle').classList.toggle('on', !!on);
   }
   $('mirrorToggle').addEventListener('click', ()=>{
     state.mirror = !state.mirror;
     setMirrorUI(state.mirror);
-    saveState(roomCode, state);
+    saveState(roomCode, state).then(ok=>{
+      if(!ok){
+        // Revert the visual toggle if the write actually failed, so the
+        // remote never shows "mirror on" while the display never got it.
+        state.mirror = !state.mirror;
+        setMirrorUI(state.mirror);
+        alert('שמירת מצב "מראה" נכשלה — בדקו חיבור לאינטרנט.');
+      }
+    });
   });
 
   $('fontMinus').addEventListener('click', ()=>{
